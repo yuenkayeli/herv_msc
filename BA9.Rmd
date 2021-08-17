@@ -1,0 +1,177 @@
+---
+BA9 R Markdown
+---
+
+R version-4.1.0 import datasets file\> Import Dataset \> From Excel \> Import
+
+finalmatrix.xls: count matrix x= erv-loci locations, y= Sample names TREM2MasterAnnotation.xlsx = load meta data
+
+```{r, message=FALSE, results='hide'}
+#load install packages
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(tibble)
+library(plotly)
+library(ggplot2)
+library(EnhancedVolcano)
+library(sva)
+library(DT)
+```
+
+```{r}
+#BA9
+
+cts <- read_excel("~/Genomic Medicine/Project/msc_project/finalmatrix.xls") 
+#header = TRUE , sep="\t", fill = TRUE, na.strings = "(NA)")
+colnames(cts) <-sub("\\.", "-", colnames(cts))
+
+cts <- as.data.frame(cts)
+rownames(cts) <-cts$`erv-id`
+
+#remove all row and col with NA
+cts <- cts[(1:789),]
+
+#remove MCI "RDobson-117
+#remove gyrus"RDobson-129", "RDobson-130", "RDobson-131", "RDobson-133"
+#remove HC "RDobson-132
+#remove failed sequencing "RDobson-98"
+ #64 remaining
+
+#outliers , low quality , "RDobson-36" 'RDobson-52'
+
+ctsBA9 <- cts %>% select('erv-id', "RDobson-97", "RDobson-22", "RDobson-94", "RDobson-42","RDobson-96", "RDobson-26", "RDobson-36", "RDobson-52", "RDobson-20", "RDobson-43", "RDobson-107", "RDobson-61", "RDobson-95", "RDobson-121", "RDobson-127", "RDobson-114", "RDobson-65", "RDobson-16", "RDobson-102", "RDobson-35", "RDobson-57", "RDobson-51", "RDobson-72", "RDobson-89", "RDobson-13", "RDobson-66", "RDobson-34", "RDobson-60", "RDobson-17", "RDobson-112", "RDobson-32", "RDobson-87", "RDobson-41", "RDobson-64", "RDobson-90", "RDobson-116", "RDobson-81", "RDobson-50", "RDobson-3",  "RDobson-73", "RDobson-77", "RDobson-12", "RDobson-39", "RDobson-110", "RDobson-37", "RDobson-99", "RDobson-59", "RDobson-55", "RDobson-23", "RDobson-124", "RDobson-11", "RDobson-86", "RDobson-108", "RDobson-25", "RDobson-83", "RDobson-24", "RDobson-105", "RDobson-103", "RDobson-75", "RDobson-68", "RDobson-123", "RDobson-79", "RDobson-71") 
+
+```
+
+```{r}
+#HC and EC
+
+meta <- read_xlsx("~/Genomic Medicine/Project/TREM2MasterAnnotation.xlsx")
+
+metaBA9 <- select(meta, `Sample ID...73`, Diagnosis_1, Tissue , `Sex`, `Age (at death)`, `PostMortemDelay (hours)`, `RIN Score`, `No. of E4 alleles`, `Sequencing Pool` ) 
+
+metaBA9<-metaBA9[metaBA9$Tissue == 'BA9',]
+
+#correct colnames into readable format
+names(metaBA9)[1] <-"Sample"
+names(metaBA9)[5] <-"Age_at_death"
+names(metaBA9)[6] <-"PostMortem_Delay_hours"
+names(metaBA9)[7] <-"RIN_Score"
+names(metaBA9)[8] <-"Num_of_E4_alleles"
+names(metaBA9)[9] <-"Seq_pool"
+
+#specify bin values
+metaBA9$Num_of_E4_alleles <- as.factor(metaBA9$Num_of_E4_alleles)
+
+#change NA values to 0 
+metaBA9[is.na(metaBA9)] <- 0
+
+#place RIN value in quintiles bins 
+#metaBA9 = mutate(metaBA9, quantile_rank = ntile(metaBA9$RIN_Score,5))
+#metaBA9$quantile_rank<- as.factor(metaBA9$quantile_rank)
+
+#place PostMortem_Delay_hours in quintile bins
+#metaBA9 = mutate(metaBA9, quantile_rank = ntile(metaBA9$PostMortem_Delay_hours,5))
+#metaBA9$quantile_rank <- as.factor(metaBA9$quantile_rank)
+
+#place Age_at_death in quintile bins
+#metaBA9 = mutate(metaBA9, quantile_rank = ntile(metaBA9$Age_at_death,5))
+#metaBA9$quantile_rank <- as.factor(metaBA9$quantile_rank)
+
+
+metaBA9 <- as.data.frame(metaBA9)
+#rm RDobson-98, RDobson-117
+metaBA9 <- metaBA9[-c(7,10),]
+#8,9
+```
+
+```{r,message=FALSE}
+#run deseq2
+dds <- DESeqDataSetFromMatrix(countData = ctsBA9 ,
+                              colData = metaBA9 ,
+                              design =~Sex + Age_at_death + RIN_Score + PostMortem_Delay_hours + Num_of_E4_alleles + Seq_pool + Diagnosis_1 ,
+                              tidy = TRUE)
+```
+
+
+```{r, message=FALSE}
+rld <- varianceStabilizingTransformation(dds)
+rld_pca <- plotPCA(rld, intgroup=c("Diagnosis_1")) + 
+  labs(title = "BA9- PCA plot 2 ") +
+  aes(label = colnames(rld))
+rld_pca_plotly <- ggplotly(rld_pca)
+rld_pca_plotly 
+```
+
+```{r}
+#correct for known batch effects using SVA and ComBat
+#"RDobson-36" 'RDobson-52' replaced to observe effect
+batch <- metaBA9$Seq_pool
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 1", '1')
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 2", '2')
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 3", '3')
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 4", '4')
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 5", '5')
+metaBA9$Seq_pool <- replace(metaBA9$Seq_pool, metaBA9$Seq_pool == "Pool 6", '6')
+metaBA9$Seq_pool <- as.numeric(metaBA9$Seq_pool)
+dat <- as.matrix(ctsBA9[2:ncol(ctsBA9)])
+
+
+modcombat = model.matrix(~1, data =(as.data.frame(metaBA9$Diagnosis_1))) 
+
+data_adjusted_BA9 <- ComBat_seq(dat, batch=batch, group = modcombat)
+
+```
+
+```{r}
+#plot PCA
+pca_adjustedBA9 <-prcomp(data_adjusted_BA9)
+pca_adjustedBA9<- summary(pca_adjustedBA9)
+
+#select pca 1 and pca 2, make matrix
+PCA1 <- pca_adjustedBA9$rotation[,1:2]
+
+#add phenotype info
+PCA1 <-cbind(PCA1,metaBA9[c(1,2,4,5,6,7,8,9)])
+
+#plot
+ggplotly(ggplot(data = PCA1, 
+                aes(x=PC1, y=PC2, col= Sample))+
+           geom_point()+
+           ggtitle("PCA after SVA"))
+```
+
+```{r,  message=FALSE}
+data_adjusted_BA9 <- as.matrix(data_adjusted_BA9)
+
+dds <- DESeqDataSetFromMatrix(countData = data_adjusted_BA9 ,
+                       colData = metaBA9 ,
+                       design =~Sex + Age_at_death + RIN_Score + PostMortem_Delay_hours + Num_of_E4_alleles + Seq_pool + Diagnosis_1 )
+```
+
+```{r}
+dds <- DESeq(dds)
+
+res <- results(dds, contrast = c("Diagnosis_1","Control", "AD"))
+
+```
+
+
+```{r,  message=FALSE}
+res$ervid <- row.names(res)
+EnhancedVolcano(res, lab= rownames(res), 
+                x ='log2FoldChange', y = 'padj',
+                title = "DESeq2 results BA9",
+                subtitle = "Differential expression Volcano Plot",
+                legendPosition = "bottom",
+                xlim = c(-3,3),
+                ylim = c(0,7),
+                pCutoff = 0.05)
+
+#look at res table as a sorted data.frame
+datatable(as.data.frame(res))
+```
+
+

@@ -1,0 +1,200 @@
+---
+Entorhinal Cortex R Markdown
+---
+
+R version-4.1.0 import datasets file\> Import Dataset \> From Excel \> Import
+
+finalmatrix.xls: count matrix x= erv-loci locations, y= Sample names TREM2MasterAnnotation.xlsx = load meta data
+
+```{r, message=FALSE, results='hide'}
+#load install packages /libraries
+library(dplyr)
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(tibble)
+library(plotly)
+library(ggplot2)
+library(EnhancedVolcano)
+library(sva)
+library(DT)
+```
+
+```{r}
+#EC
+#load count data + ERV loci data frame
+
+cts <- read_excel("~/Genomic Medicine/Project/msc_project/finalmatrix.xls") 
+#View(cts)
+
+colnames(cts) <-sub("\\.", "-", colnames(cts))
+
+cts <- as.data.frame(cts)
+rownames(cts) <-cts$`erv-id`
+
+#remove all row and col with NA
+cts <- cts[(1:789),]
+
+#remove MCI "RDobson-38"
+#remove HC "RDobson-132"
+#remove gyrus"RDobson-129", "RDobson-130", "RDobson-131", "RDobson-133"
+#remove failed sequencing  'RDobson-18'
+#remaining 62 in total
+
+# outliers , low quality  'RDobson-67', "RDobson-101"
+
+ctsEC <-cts %>% select('erv-id',"RDobson-58", "RDobson-119", "RDobson-40",  "RDobson-113", "RDobson-76", "RDobson-67", "RDobson-101", "RDobson-10", "RDobson-111", "RDobson-120", "RDobson-125", "RDobson-91", "RDobson-4", "RDobson-31", "RDobson-45", "RDobson-63", "RDobson-29", "RDobson-33", "RDobson-109", "RDobson-80","RDobson-54", "RDobson-48", "RDobson-78", "RDobson-88", "RDobson-126", "RDobson-28", "RDobson-30", "RDobson-93", "RDobson-2", "RDobson-7", "RDobson-118", "RDobson-5", "RDobson-56", "RDobson-21", "RDobson-53", "RDobson-104", "RDobson-27", "RDobson-1", "RDobson-74", "RDobson-85", "RDobson-92", "RDobson-9", "RDobson-6", "RDobson-84", "RDobson-62", "RDobson-14", "RDobson-19", "RDobson-122", "RDobson-69", "RDobson-44", "RDobson-8", "RDobson-128", "RDobson-49", "RDobson-100", "RDobson-106", "RDobson-46", "RDobson-70", "RDobson-115", "RDobson-15", "RDobson-82", "RDobson-47")
+
+```
+
+```{r}
+#load metadata and select data fields of interest, rename field to contain no spaces
+
+meta <- read_xlsx("~/Genomic Medicine/Project/TREM2MasterAnnotation.xlsx")
+#View(TREM2MasterAnnotation)
+
+metaData <- select(meta, `Sample ID...73`, Diagnosis_1, Tissue , `Sex`, `Age (at death)`, `PostMortemDelay (hours)`, `RIN Score`, `No. of E4 alleles`, `Sequencing Pool`) 
+
+metaEC<-metaData[metaData$Tissue == 'Entorhinal cortex',]
+
+names(metaEC)[1] <-"Sample"
+names(metaEC)[5] <-"Age_at_death"
+names(metaEC)[6] <-"PostMortem_Delay_hours"
+names(metaEC)[7] <-"RIN_Score"
+names(metaEC)[8] <-"Num_of_E4_alleles"
+names(metaEC)[9] <-"Seq_pool"
+
+#specify bin values
+metaEC$Num_of_E4_alleles <- as.factor(metaEC$Num_of_E4_alleles)
+
+metaEC[is.na(metaEC)] <- 0
+
+
+#place RIN value in quintiles bins 
+#metaEC = mutate(metaEC, quantile_rank = ntile(metaEC$RIN_Score,5))
+#metaEC$quantile_rank<- as.factor(metaEC$quantile_rank)
+
+#place PostMortem_Delay_hours in quintile bins
+#metaEC = mutate(metaEC, quantile_rank = ntile(metaEC$PostMortem_Delay_hours,5))
+#metaEC$quantile_rank <- as.factor(metaEC$quantile_rank)
+
+#place Age_at_death in quintile bins
+#metaEC = mutate(metaEC, quantile_rank = ntile(metaEC$Age_at_death,5))
+#metaEC$quantile_rank <- as.factor(metaEC$quantile_rank)
+
+
+#only EC 
+metaEC <- as.data.frame(metaEC)
+
+# need to remove MCI RDobson-38
+#rm RDobson-18 
+metaEC <- metaEC[-c(6,9),]
+#7,8
+```
+
+```{r, message=FALSE}
+
+#run deseq2
+dds <- DESeqDataSetFromMatrix(countData = ctsEC ,
+                       colData = metaEC ,
+                       design =~Sex + Age_at_death + RIN_Score + PostMortem_Delay_hours + Num_of_E4_alleles + Seq_pool + Diagnosis_1 ,
+                       tidy = TRUE)
+
+```
+
+```{r,  message=FALSE}
+#inital PCA to assess variance of data
+ rld <- varianceStabilizingTransformation(dds)
+  rld_pca <- plotPCA(rld, intgroup=c("Diagnosis_1" )) + 
+    labs(title = "EC-PCA ") +
+      aes(label = colnames(rld))
+  rld_pca_plotly <- ggplotly(rld_pca)
+  rld_pca_plotly
+```
+
+```{r}
+#correct for known batch effects using SVA and ComBat
+# 'RDobson-67', "RDobson-101" replaced for SVA analysis
+batch <- metaEC$Seq_pool
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 1", '1')
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 2", '2')
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 3", '3')
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 4", '4')
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 5", '5')
+metaEC$Seq_pool <- replace(metaEC$Seq_pool, metaEC$Seq_pool == "Pool 6", '6')
+metaEC$Seq_pool <- as.numeric(metaEC$Seq_pool)
+dat <- as.matrix(ctsEC[2:ncol(ctsEC)])
+
+modcombat = model.matrix(~1, data =(as.data.frame(metaEC$Diagnosis_1))) 
+
+data_adjusted_EC <- ComBat_seq(dat, batch=batch, group = modcombat)
+
+```
+
+```{r}
+#plot PCA
+pca_adjusted <-prcomp(data_adjusted_EC)
+pca_adjustedEC<- summary(pca_adjusted)
+
+#select pca 1 and pca 2, make matrix
+PCA1 <- pca_adjustedEC$rotation[,1:2]
+
+#add phenotype info
+PCA1 <-cbind(PCA1,metaEC[c(1,2,4,5,6,7,8,9)])
+
+#head(pca_adjustedEC)
+
+#plot
+ggplotly(ggplot(data = PCA1, 
+                aes(x=PC1, y=PC2, col= Diagnosis_1))+
+            xlab("PC1: 0.85% variance") +
+           ylab("PC2: 0.04% variance") +
+           geom_point()+
+           ggtitle("EC- PCA after SVA"))
+```
+
+```{r, message=FALSE}
+data_adjusted_EC <- as.matrix(data_adjusted_EC)
+
+dds <- DESeqDataSetFromMatrix(countData = data_adjusted_EC ,
+                       colData = metaEC ,
+                       design =~Sex + Age_at_death + RIN_Score + PostMortem_Delay_hours + Num_of_E4_alleles + Seq_pool + Diagnosis_1 )
+```
+
+```{r}
+
+#analyse
+ddsEC <- DESeq(dds)
+
+#get results
+res <- results(ddsEC, contrast = c("Diagnosis_1","Control", "AD"))
+
+```
+
+```{r,  message=FALSE}
+#see volcano plot of 0.05 as p-value
+res$ervid <- row.names(res)
+
+EnhancedVolcano(res, 
+                lab= rownames(res), 
+                x ='log2FoldChange', y = 'padj',
+                xlab = bquote(~Log[2]~ "fold change"),
+                ylab = ~-Log[10]~adjusted~italic(P),
+                title = "DESeq2 results EC",
+                subtitle = "Differential expression Volcano Plot",
+                legendPosition = "bottom",
+                xlim = c(-2,2),
+                ylim = c(0,3),
+                pCutoff = 0.05)
+
+#look at res table as a sorted data.frame
+datatable(as.data.frame(res))
+```
+
+```{r, message=FALSE}
+#check if any significant EC ERV loci are present in BA9
+#c('5867', '3276', '3403', '3537') %in% resSig$ervid
+#loci 3537 TRUE
+
+```
+
